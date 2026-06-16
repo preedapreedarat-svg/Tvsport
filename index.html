@@ -84,6 +84,17 @@
   .ch .meta h4{font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .ch .meta p{font-size:11.5px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .ch .num{font-family:'JetBrains Mono';font-size:11px;color:var(--muted)}
+  .ch .fav{width:30px;height:30px;border-radius:9px;flex-shrink:0;display:grid;place-items:center;
+    background:transparent;border:1px solid transparent;cursor:pointer;color:var(--muted);transition:.15s;opacity:.55}
+  .ch:hover .fav{opacity:1}
+  .ch .fav.on{opacity:1;color:var(--amber)}
+  .ch .fav svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.7}
+  .ch .fav.on svg{fill:var(--amber);stroke:var(--amber)}
+  .ch .fav:hover{background:rgba(255,176,32,.14)}
+  .tabs{display:flex;gap:6px;margin:4px 0 2px}
+  .tabs button{flex:1;font-size:12.5px;font-weight:600;padding:9px;border-radius:11px;cursor:pointer;
+    background:var(--panel-2);border:1px solid var(--line);color:var(--muted);transition:.15s}
+  .tabs button.active{color:var(--txt);background:linear-gradient(135deg,rgba(124,92,255,.25),rgba(34,211,238,.1));border-color:rgba(124,92,255,.4)}
   .ch .del{width:30px;height:30px;border-radius:9px;flex-shrink:0;display:grid;place-items:center;
     background:transparent;border:1px solid transparent;cursor:pointer;color:var(--muted);transition:.15s;opacity:0}
   .ch:hover .del{opacity:1}
@@ -180,6 +191,10 @@
         <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
         <input id="search" placeholder="ค้นหาช่อง…">
       </div>
+      <div class="tabs" id="tabs" style="display:none">
+        <button id="tabAll" class="active">ทั้งหมด</button>
+        <button id="tabFav">★ โปรด (0)</button>
+      </div>
       <div class="checkbar" id="checkBar"><i id="checkFill"></i></div>
       <div class="checksum" id="checkSum">
         <span><i style="background:var(--green)"></i><span id="sumOk">0</span> ใช้ได้</span>
@@ -218,9 +233,34 @@ const npDesc = document.getElementById('npDesc');
 const npBadge = document.getElementById('npBadge');
 const toastEl = document.getElementById('toast');
 
-let channels = [];      // {name, url, logo, group}
+let channels = [];      // {name, url, logo, group, fav, status, dead}
 let hls = null;
 let activeIdx = -1;
+let view = 'all';       // 'all' | 'fav'
+
+const STORE_KEY = 'nexa_iptv_channels_v1';
+
+// ── บันทึก / โหลด จากเครื่อง ──
+function saveChannels(){
+  try{
+    localStorage.setItem(STORE_KEY, JSON.stringify(channels));
+  }catch(e){
+    // localStorage ใช้ไม่ได้ (เช่น เปิดในตัวพรีวิว) — ข้ามไปเงียบๆ
+  }
+}
+function restoreChannels(){
+  try{
+    const raw = localStorage.getItem(STORE_KEY);
+    if (raw){
+      const data = JSON.parse(raw);
+      if (Array.isArray(data) && data.length){
+        channels = data;
+        return true;
+      }
+    }
+  }catch(e){}
+  return false;
+}
 
 function toast(msg, isErr){
   toastEl.textContent = msg;
@@ -249,20 +289,37 @@ function parseM3U(text){
   return out;
 }
 
-function loadChannels(list){
+function loadChannels(list, append){
   if (!list.length){ toast('ไม่พบช่องในไฟล์นี้', true); return; }
-  channels = list;
+  if (append && channels.length){
+    // ต่อท้าย โดยข้ามช่องซ้ำ (ดูจาก url)
+    const have = new Set(channels.map(c=>c.url));
+    const fresh = list.filter(c=>!have.has(c.url));
+    channels = channels.concat(fresh);
+    toast('เพิ่มอีก ' + fresh.length + ' ช่อง (รวม ' + channels.length + ')');
+  } else {
+    channels = list;
+    toast('นำเข้า ' + list.length + ' ช่องเรียบร้อย');
+  }
+  saveChannels();
   renderList();
-  toast('นำเข้า ' + list.length + ' ช่องเรียบร้อย');
 }
 
 function renderList(){
   const q = search.value.toLowerCase().trim();
-  const filtered = channels.filter(c => c.name.toLowerCase().includes(q) || c.group.toLowerCase().includes(q));
+  const favCount = channels.filter(c=>c.fav).length;
+  let pool = channels;
+  if (view==='fav') pool = channels.filter(c=>c.fav);
+  const filtered = pool.filter(c => c.name.toLowerCase().includes(q) || (c.group||'').toLowerCase().includes(q));
   chCount.textContent = channels.length + ' ช่อง';
+  document.getElementById('tabFav').textContent = '★ โปรด (' + favCount + ')';
   document.getElementById('listTools').style.display = channels.length ? 'flex' : 'none';
+  document.getElementById('tabs').style.display = channels.length ? 'flex' : 'none';
   if (!channels.length){ chList.innerHTML=''; chList.appendChild(emptyMsg); return; }
-  if (!filtered.length){ chList.innerHTML = '<div class="empty">ไม่พบช่องที่ตรงกับ “'+search.value+'”</div>'; return; }
+  if (!filtered.length){
+    chList.innerHTML = '<div class="empty">'+(view==='fav'?'ยังไม่มีช่องโปรด<br>กดรูปดาว ☆ ที่ช่องเพื่อเก็บไว้':'ไม่พบช่องที่ตรงกับ “'+escapeHtml(search.value)+'”')+'</div>';
+    return;
+  }
   chList.innerHTML = '';
   filtered.forEach(c => {
     const realIdx = channels.indexOf(c);
@@ -276,13 +333,21 @@ function renderList(){
         ? '<img class="logo-ch" src="'+c.logo+'" onerror="this.replaceWith(Object.assign(document.createElement(\'div\'),{className:\'logo-ch\',style:\'background:linear-gradient(135deg,var(--violet),var(--cyan))\',textContent:\''+initials+'\'}))">'
         : '<div class="logo-ch" style="background:linear-gradient(135deg,var(--violet),var(--cyan))">'+initials+'</div>')
       + '<div class="meta"><h4>'+escapeHtml(c.name)+'</h4><p>'+(c.dead?'⚠ เล่นไม่ได้ · ':'')+(escapeHtml(c.group)||'ไม่ระบุหมวด')+'</p></div>'
-      + '<div class="num">'+(realIdx+1)+'</div>'
+      + '<button class="fav'+(c.fav?' on':'')+'" title="'+(c.fav?'เอาออกจากโปรด':'เพิ่มในโปรด')+'"><svg viewBox="0 0 24 24"><path d="M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z"/></svg></button>'
       + '<button class="del" title="ลบช่องนี้"><svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg></button>';
     el.querySelector('.meta').onclick = ()=>playChannel(realIdx);
     el.querySelector('.logo-ch').onclick = ()=>playChannel(realIdx);
+    el.querySelector('.fav').onclick = (ev)=>{ ev.stopPropagation(); toggleFav(realIdx); };
     el.querySelector('.del').onclick = (ev)=>{ ev.stopPropagation(); deleteChannel(realIdx); };
     chList.appendChild(el);
   });
+}
+
+function toggleFav(idx){
+  channels[idx].fav = !channels[idx].fav;
+  saveChannels();
+  renderList();
+  toast(channels[idx].fav ? 'เพิ่ม “'+channels[idx].name+'” ในช่องโปรด' : 'เอาออกจากช่องโปรด');
 }
 
 function deleteChannel(idx){
@@ -290,6 +355,7 @@ function deleteChannel(idx){
   channels.splice(idx, 1);
   if (activeIdx === idx){ stopPlayback(); activeIdx = -1; }
   else if (activeIdx > idx){ activeIdx--; }
+  saveChannels();
   renderList();
   toast('ลบ “' + name + '” แล้ว');
 }
@@ -344,7 +410,14 @@ document.getElementById('loadBtn').onclick = ()=>document.getElementById('fileIn
 document.getElementById('fileInput').onchange = (e)=>{
   const f = e.target.files[0]; if(!f) return;
   const r = new FileReader();
-  r.onload = ()=> loadChannels(parseM3U(r.result));
+  r.onload = ()=>{
+    const parsed = parseM3U(r.result);
+    let append = false;
+    if (channels.length){
+      append = confirm('มีช่องอยู่แล้ว ' + channels.length + ' ช่อง\n\nกด "ตกลง" = เพิ่มช่องใหม่ต่อท้าย (เก็บของเดิมไว้)\nกด "ยกเลิก" = แทนที่ด้วยรายการใหม่');
+    }
+    loadChannels(parsed, append);
+  };
   r.onerror = ()=> toast('อ่านไฟล์ไม่สำเร็จ', true);
   r.readAsText(f);
   e.target.value = '';
@@ -356,11 +429,12 @@ document.getElementById('urlBtn').onclick = ()=>{
   if (!url) return;
   const u = url.trim();
   if (u.endsWith('.m3u') || u.includes('get.php') || u.includes('type=m3u')){
-    fetch(u).then(r=>r.text()).then(t=>loadChannels(parseM3U(t)))
+    fetch(u).then(r=>r.text()).then(t=>loadChannels(parseM3U(t), channels.length>0))
       .catch(()=>toast('โหลด playlist จาก URL ไม่สำเร็จ (อาจติด CORS)', true));
   } else {
     const name = prompt('ตั้งชื่อช่องนี้:', 'ช่องใหม่') || 'ช่องใหม่';
     channels.push({ name, url:u, logo:'', group:'เพิ่มเอง' });
+    saveChannels();
     renderList();
     playChannel(channels.length-1);
   }
@@ -427,6 +501,7 @@ async function checkAll(){
 
   btn.textContent = 'ตรวจสอบทุกช่อง'; btn.disabled = false;
   checking = false;
+  saveChannels();
   toast('ตรวจเสร็จ: ใช้ได้ '+ok+' · เสีย '+bad+' · เช็คไม่ได้ '+unk);
 }
 
@@ -442,17 +517,41 @@ document.getElementById('clearDeadBtn').onclick = ()=>{
   if (!removed){ toast('ยังไม่มีช่องที่ถูกทำเครื่องหมายว่าเล่นไม่ได้'); return; }
   activeIdx = wasActive ? channels.indexOf(wasActive) : -1;
   if (activeIdx === -1 && wasActive) stopPlayback();
+  saveChannels();
   renderList();
   toast('ลบช่องที่เล่นไม่ได้ ' + removed + ' ช่อง');
 };
 
 document.getElementById('clearAllBtn').onclick = ()=>{
   if (!channels.length) return;
-  if (!confirm('ล้างรายการช่องทั้งหมด ' + channels.length + ' ช่อง?')) return;
+  if (!confirm('ล้างรายการช่องทั้งหมด ' + channels.length + ' ช่อง? (รวมช่องโปรด)')) return;
   channels = []; activeIdx = -1;
+  saveChannels();
   stopPlayback(); renderList();
   toast('ล้างรายการช่องทั้งหมดแล้ว');
 };
+
+// ── แท็บ ทั้งหมด / โปรด ──
+document.getElementById('tabAll').onclick = ()=>{
+  view='all';
+  document.getElementById('tabAll').classList.add('active');
+  document.getElementById('tabFav').classList.remove('active');
+  renderList();
+};
+document.getElementById('tabFav').onclick = ()=>{
+  view='fav';
+  document.getElementById('tabFav').classList.add('active');
+  document.getElementById('tabAll').classList.remove('active');
+  renderList();
+};
+
+// ── เริ่มต้น: โหลดช่องที่บันทึกไว้ ──
+(function init(){
+  if (restoreChannels()){
+    renderList();
+    toast('โหลดช่องที่บันทึกไว้ ' + channels.length + ' ช่อง');
+  }
+})();
 </script>
 </body>
 </html>
